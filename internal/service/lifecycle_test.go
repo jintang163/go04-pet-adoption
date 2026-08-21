@@ -2,6 +2,8 @@ package service_test
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +16,19 @@ import (
 type fixedClock struct{ t time.Time }
 
 func (c fixedClock) Now() time.Time { return c.t }
+
+type applicationLimitBarrierStore struct {
+	store.Store
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *applicationLimitBarrierStore) CountActiveApplicationsByApplicant(ctx context.Context, applicantID string) (int, error) {
+	n, err := s.Store.CountActiveApplicationsByApplicant(ctx, applicantID)
+	s.entered <- struct{}{}
+	<-s.release
+	return n, err
+}
 
 func setup(t *testing.T) (context.Context, *service.Services, *store.MemoryStore, *auth.PasswordHasher) {
 	t.Helper()
@@ -225,5 +240,83 @@ func TestRejectUnlocksWaitlist(t *testing.T) {
 	w, _ := mem.GetApplication(ctx, app2.ID)
 	if w.Status != model.AppPending {
 		t.Fatalf("waitlist promote got %s", w.Status)
+	}
+}
+
+func TestConcurrentApplicationsRespectPendingLimit(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemoryStore(time.Now, nil)
+	barrier := &applicationLimitBarrierStore{
+		Store:   mem,
+		entered: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+	svc := service.NewServices(barrier, auth.NewPasswordHasher(), auth.NewSessionManager(time.Hour), nil, 1)
+
+	adopter, err := mem.CreateUser(ctx, model.User{
+		Username: "concurrent-adopter", DisplayName: "并发申请人", Role: model.RoleAdopter,
+		Status: model.UserActive, CreditScore: 60, AgeYears: 30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pet1, err := mem.CreatePet(ctx, model.Pet{
+		Name: "小白", Species: model.SpeciesCat, Size: model.SizeSmall, Status: model.PetPublished,
+		AllowApartment: true, AllowChildren: true, AllowOtherPets: true, MinAdopterAge: 18,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pet2, err := mem.CreatePet(ctx, model.Pet{
+		Name: "小黑", Species: model.SpeciesCat, Size: model.SizeSmall, Status: model.PetPublished,
+		AllowApartment: true, AllowChildren: true, AllowOtherPets: true, MinAdopterAge: 18,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	in := model.ApplyInput{
+		Housing: model.HousingApartment, Experience: model.ExperienceSome,
+		Phone: "13800006666", Intro: "有稳定住所并能长期照顾宠物。",
+	}
+	petIDs := []string{pet1.ID, pet2.ID}
+	errs := make(chan error, len(petIDs))
+	var wg sync.WaitGroup
+	for _, petID := range petIDs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, applyErr := svc.App.Apply(ctx, adopter, petID, in)
+			errs <- applyErr
+		}()
+	}
+
+	<-barrier.entered
+	<-barrier.entered
+	close(barrier.release)
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	limitErrors := 0
+	for applyErr := range errs {
+		switch {
+		case applyErr == nil:
+			successes++
+		case errors.Is(applyErr, model.ErrTooManyApplications):
+			limitErrors++
+		default:
+			t.Fatalf("unexpected apply error: %v", applyErr)
+		}
+	}
+	if successes != 1 || limitErrors != 1 {
+		t.Fatalf("pending limit=1: want one success and one limit error, got successes=%d limit_errors=%d", successes, limitErrors)
+	}
+	active, err := mem.CountActiveApplicationsByApplicant(ctx, adopter.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active != 1 {
+		t.Fatalf("pending limit=1: active applications=%d", active)
 	}
 }
