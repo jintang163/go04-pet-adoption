@@ -89,6 +89,7 @@ func (fs *FileStore) writeAtomic(snap Snapshot) error {
 }
 
 func (fs *FileStore) Flush() error {
+	fs.mem.waitForPersist()
 	fs.saveMu.Lock()
 	defer fs.saveMu.Unlock()
 	return fs.writeAtomic(fs.mem.Snapshot())

@@ -13,24 +13,25 @@ type IDGenerator func(prefix string) string
 type MemoryStore struct {
 	mu sync.RWMutex
 
-	users    map[string]model.User
-	username map[string]string
-	shelters map[string]model.Shelter
-	pets     map[string]model.Pet
-	apps     map[string]model.Application
-	appIdx   map[string]string
-	visits   map[string]model.Visit
-	health   map[string]model.HealthRecord
+	users     map[string]model.User
+	username  map[string]string
+	shelters  map[string]model.Shelter
+	pets      map[string]model.Pet
+	apps      map[string]model.Application
+	appIdx    map[string]string
+	visits    map[string]model.Visit
+	health    map[string]model.HealthRecord
 	favorites map[string]model.Favorite
-	favIdx   map[model.FavoriteKey]string
+	favIdx    map[model.FavoriteKey]string
 	inquiries map[string]model.Inquiry
-	notifs   map[string]model.Notification
-	audits   map[string]model.AuditLog
-	credits  map[string]model.CreditLog
+	notifs    map[string]model.Notification
+	audits    map[string]model.AuditLog
+	credits   map[string]model.CreditLog
 
 	now         func() time.Time
 	genID       IDGenerator
 	persistHook func()
+	persistWG   sync.WaitGroup
 }
 
 func NewMemoryStore(now func() time.Time, genID IDGenerator) *MemoryStore {
@@ -73,7 +74,15 @@ func (s *MemoryStore) afterWrite() {
 	hook := s.persistHook
 	// persistHook 会调用 Snapshot()（再取读锁）。写路径持有写锁，必须异步落盘，
 	// 否则 RWMutex 重入会死锁。关停时仍由 FileStore.Flush 同步刷盘。
-	go hook()
+	s.persistWG.Add(1)
+	go func() {
+		defer s.persistWG.Done()
+		hook()
+	}()
+}
+
+func (s *MemoryStore) waitForPersist() {
+	s.persistWG.Wait()
 }
 
 func appKey(petID, applicantID string) string { return petID + "|" + applicantID }
@@ -85,18 +94,18 @@ func favKey(userID, petID string) model.FavoriteKey {
 const snapshotVersion = 1
 
 type Snapshot struct {
-	Version       int                    `json:"version"`
-	Users         []model.User           `json:"users"`
-	Shelters      []model.Shelter        `json:"shelters"`
-	Pets          []model.Pet            `json:"pets"`
-	Applications  []model.Application    `json:"applications"`
-	Visits        []model.Visit          `json:"visits"`
-	Health        []model.HealthRecord   `json:"health"`
-	Favorites     []model.Favorite       `json:"favorites"`
-	Inquiries     []model.Inquiry        `json:"inquiries"`
-	Notifications []model.Notification   `json:"notifications"`
-	AuditLogs     []model.AuditLog       `json:"audit_logs"`
-	CreditLogs    []model.CreditLog      `json:"credit_logs"`
+	Version       int                  `json:"version"`
+	Users         []model.User         `json:"users"`
+	Shelters      []model.Shelter      `json:"shelters"`
+	Pets          []model.Pet          `json:"pets"`
+	Applications  []model.Application  `json:"applications"`
+	Visits        []model.Visit        `json:"visits"`
+	Health        []model.HealthRecord `json:"health"`
+	Favorites     []model.Favorite     `json:"favorites"`
+	Inquiries     []model.Inquiry      `json:"inquiries"`
+	Notifications []model.Notification `json:"notifications"`
+	AuditLogs     []model.AuditLog     `json:"audit_logs"`
+	CreditLogs    []model.CreditLog    `json:"credit_logs"`
 }
 
 func mapValues[K comparable, V any](m map[K]V) []V {
