@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"go04-pet-adoption/internal/model"
@@ -263,6 +264,71 @@ func (s *MemoryStore) ApproveApplication(ctx context.Context, appID, reviewerID,
 	waitlisted := s.waitlistOthersLocked(p.ID, a.ID, now)
 	s.afterWrite()
 	return a, p, waitlisted, nil
+}
+
+// WithdrawApprovedApplication 在单次写锁内原子地完成"已录取申请撤回"，
+// 包含：状态校验、信用扣分、申请状态流转为 AppWithdrawn、宠物解锁并候补递补。
+//
+// 将信用扣分与状态流转放在同一把写锁内，并在锁内校验 a.Status == AppApproved，
+// 可避免上层先读后写时两个并发撤回请求同时通过状态检查、各自扣分、随后只有一次
+// 状态流转成功的竞态（失败的那次撤回会留下信用副作用——多扣一次分并多一条记录）。
+// 第二个请求会在锁内发现状态已不是 AppApproved 而直接返回 ErrInvalidAppStatus，
+// 不产生任何信用副作用。
+func (s *MemoryStore) WithdrawApprovedApplication(ctx context.Context, appID, applicantID, actorID string, creditDelta int, creditReason model.CreditReason, creditNote string, now time.Time) (model.Application, *model.Pet, []model.Application, model.CreditLog, error) {
+	_ = ctx
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.apps[appID]
+	if !ok {
+		return model.Application{}, nil, nil, model.CreditLog{}, model.ErrNotFound
+	}
+	if a.Status != model.AppApproved {
+		return model.Application{}, nil, nil, model.CreditLog{}, model.ErrInvalidAppStatus
+	}
+	p, ok := s.pets[a.PetID]
+	if !ok {
+		return model.Application{}, nil, nil, model.CreditLog{}, model.ErrNotFound
+	}
+	if now.IsZero() {
+		now = s.now()
+	}
+	// 信用扣分：在状态流转前完成，确保只有真正夺得这把锁的请求才会扣分。
+	u, ok := s.users[applicantID]
+	if !ok {
+		return model.Application{}, nil, nil, model.CreditLog{}, model.ErrNotFound
+	}
+	u.CreditScore = model.ClampCredit(u.CreditScore + creditDelta)
+	u.UpdatedAt = now
+	log := model.CreditLog{
+		ID:        s.genID(model.CreditLogIDPrefix),
+		UserID:    applicantID,
+		Delta:     creditDelta,
+		Score:     u.CreditScore,
+		Reason:    creditReason,
+		RelatedID: a.ID,
+		Note:      strings.TrimSpace(creditNote),
+		CreatedAt: now,
+	}
+	s.users[u.ID] = u
+	s.credits[log.ID] = log
+	// 状态流转：先走解锁/递补逻辑（与 RejectApplication 对已录取申请一致），
+	// 再将状态置为 AppWithdrawn 以区分主动撤回。
+	a.Status = model.AppWithdrawn
+	a.ReviewerID = actorID
+	a.RejectReason = "申请人撤回"
+	a.UpdatedAt = now
+	t := now
+	a.ReviewedAt = &t
+	s.apps[a.ID] = a
+	var petPtr *model.Pet
+	var promoted []model.Application
+	if p.ReservedAppID == a.ID {
+		np, pr := s.unlockPetAndPromoteLocked(p, now)
+		petPtr = &np
+		promoted = pr
+	}
+	s.afterWrite()
+	return a, petPtr, promoted, log, nil
 }
 
 func (s *MemoryStore) RejectApplication(ctx context.Context, appID, reviewerID, reason string, now time.Time) (model.Application, *model.Pet, []model.Application, error) {

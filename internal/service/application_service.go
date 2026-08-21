@@ -223,16 +223,12 @@ func (svc *ApplicationService) Withdraw(ctx context.Context, actor model.User, i
 	}
 	now := svc.clock.Now()
 	if a.Status == model.AppApproved {
-		_, _, err := svc.store.ApplyCredit(ctx, a.ApplicantID, policy.DeltaApplyDefault, model.CreditApplyDefault, a.ID, "录取后撤回", now)
-		if err != nil {
-			return model.Application{}, err
-		}
-		updated, pet, promoted, err := svc.store.RejectApplication(ctx, id, actor.ID, "申请人撤回", now)
-		if err != nil {
-			return model.Application{}, err
-		}
-		updated.Status = model.AppWithdrawn
-		updated, err = svc.store.UpdateApplication(ctx, updated)
+		// 已录取撤回需要扣信用分。将"状态校验 + 扣分 + 状态流转 + 宠物解锁/候补递补"
+		// 全部下沉到 store 的单次写锁内原子完成，避免并发撤回时两次请求同时通过外层
+		// 状态检查、各自扣分，而只有一次状态流转成功的竞态（失败方留下信用副作用）。
+		// 真正夺得锁的请求完成扣分与流转；另一请求在锁内发现状态已不再是 AppApproved
+		// 而返回 ErrInvalidAppStatus，不产生任何信用副作用。
+		updated, pet, promoted, _, err := svc.store.WithdrawApprovedApplication(ctx, id, a.ApplicantID, actor.ID, policy.DeltaApplyDefault, model.CreditApplyDefault, "录取后撤回", now)
 		if err != nil {
 			return model.Application{}, err
 		}

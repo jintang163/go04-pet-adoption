@@ -34,13 +34,17 @@ type withdrawalCreditBarrierStore struct {
 	proceed chan struct{}
 }
 
-func (s *withdrawalCreditBarrierStore) ApplyCredit(ctx context.Context, userID string, delta int, reason model.CreditReason, relatedID, note string, now time.Time) (model.User, model.CreditLog, error) {
+// WithdrawApprovedApplication 在真正落库前同步两个并发撤回请求，强制制造曾经导致竞态的
+// 窗口：两个请求必须同时进入临界区，才能验证"状态校验 + 扣分 + 状态流转"是在同一把写锁
+// 内原子完成的。注意：barrier 必须先释放进入信号、再调用底层实现，否则两个 goroutine
+// 会在底层写锁上串行化，无法真正制造并发窗口。
+func (s *withdrawalCreditBarrierStore) WithdrawApprovedApplication(ctx context.Context, appID, applicantID, actorID string, creditDelta int, creditReason model.CreditReason, creditNote string, now time.Time) (model.Application, *model.Pet, []model.Application, model.CreditLog, error) {
 	s.entered <- struct{}{}
 	<-s.release
-	u, log, err := s.Store.ApplyCredit(ctx, userID, delta, reason, relatedID, note, now)
+	app, pet, promoted, log, err := s.Store.WithdrawApprovedApplication(ctx, appID, applicantID, actorID, creditDelta, creditReason, creditNote, now)
 	s.applied <- struct{}{}
 	<-s.proceed
-	return u, log, err
+	return app, pet, promoted, log, err
 }
 
 func (s *applicationLimitBarrierStore) CreateApplication(ctx context.Context, a model.Application, maxActive int) (model.Application, error) {
