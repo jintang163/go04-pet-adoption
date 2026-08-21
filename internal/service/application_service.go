@@ -54,16 +54,8 @@ func (svc *ApplicationService) Apply(ctx context.Context, actor model.User, petI
 	if !policy.LargeDogNeedsSpace(p, in.Housing, in.AreaSqm) {
 		return model.Application{}, model.ErrRequirementNotMet
 	}
-	n, err := svc.store.CountActiveApplicationsByApplicant(ctx, actor.ID)
-	if err != nil {
-		return model.Application{}, err
-	}
-	if n >= svc.maxPend {
-		return model.Application{}, model.ErrTooManyApplications
-	}
-	if old, err := svc.store.GetApplicationByPetApplicant(ctx, petID, actor.ID); err == nil && old.Status.IsActive() {
-		return model.Application{}, model.ErrAlreadyApplied
-	}
+	// 活跃申请数量上限与重复申请校验在 CreateApplication 内部完成（同一把写锁），
+	// 避免在此处先读后写造成并发请求同时通过上限检查的竞态。
 	now := svc.clock.Now()
 	app := model.Application{
 		PetID:        p.ID,
@@ -81,7 +73,7 @@ func (svc *ApplicationService) Apply(ctx context.Context, actor model.User, petI
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
-	created, err := svc.store.CreateApplication(ctx, app)
+	created, err := svc.store.CreateApplication(ctx, app, svc.maxPend)
 	if err != nil {
 		return model.Application{}, err
 	}

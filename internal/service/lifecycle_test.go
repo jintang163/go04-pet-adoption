@@ -17,17 +17,19 @@ type fixedClock struct{ t time.Time }
 
 func (c fixedClock) Now() time.Time { return c.t }
 
+// applicationLimitBarrierStore 通过在 CreateApplication 真正落库前同步两个并发请求，
+// 强制制造曾经导致竞态的"check-then-act"窗口：两个请求必须同时到达临界区，
+// 才能验证数量上限校验是在同一把写锁内原子完成的。
 type applicationLimitBarrierStore struct {
 	store.Store
 	entered chan struct{}
 	release chan struct{}
 }
 
-func (s *applicationLimitBarrierStore) CountActiveApplicationsByApplicant(ctx context.Context, applicantID string) (int, error) {
-	n, err := s.Store.CountActiveApplicationsByApplicant(ctx, applicantID)
+func (s *applicationLimitBarrierStore) CreateApplication(ctx context.Context, a model.Application, maxActive int) (model.Application, error) {
 	s.entered <- struct{}{}
 	<-s.release
-	return n, err
+	return s.Store.CreateApplication(ctx, a, maxActive)
 }
 
 func setup(t *testing.T) (context.Context, *service.Services, *store.MemoryStore, *auth.PasswordHasher) {
