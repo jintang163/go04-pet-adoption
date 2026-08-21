@@ -27,7 +27,9 @@ type Store interface {
 	UpdatePet(ctx context.Context, p model.Pet) (model.Pet, error)
 	CountPetsByStatus(ctx context.Context, shelterID string) (map[model.PetStatus]int, int, error)
 
-	CreateApplication(ctx context.Context, a model.Application) (model.Application, error)
+	// CreateApplication 在同一把写锁内完成"重复活跃申请"与"待处理申请上限"两项校验再插入，
+	// 避免上层先读后写造成 check-then-act 竞态。maxActive<=0 表示不校验上限。
+	CreateApplication(ctx context.Context, a model.Application, maxActive int) (model.Application, error)
 	GetApplication(ctx context.Context, id string) (model.Application, error)
 	GetApplicationByPetApplicant(ctx context.Context, petID, applicantID string) (model.Application, error)
 	ListApplications(ctx context.Context, f model.ApplicationFilter) ([]model.Application, error)

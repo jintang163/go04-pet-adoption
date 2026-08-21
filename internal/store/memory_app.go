@@ -8,7 +8,15 @@ import (
 	"go04-pet-adoption/internal/model"
 )
 
-func (s *MemoryStore) CreateApplication(ctx context.Context, a model.Application) (model.Application, error) {
+// CreateApplication 在单次写锁内原子地完成校验与插入。
+//
+// 校验顺序与返回错误与上层 Apply 保持一致：
+//  1. 同一宠物+申请人的重复活跃申请 → ErrAlreadyApplied
+//  2. 申请人活跃申请数已达上限 → ErrTooManyApplications（maxActive<=0 时不校验）
+//
+// 将数量上限校验放在写锁内，可避免上层先读后写时两个并发请求同时通过上限
+// 检查、随后各自插入，绕过"待处理申请上限"的竞态。
+func (s *MemoryStore) CreateApplication(ctx context.Context, a model.Application, maxActive int) (model.Application, error) {
 	_ = ctx
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -17,6 +25,17 @@ func (s *MemoryStore) CreateApplication(ctx context.Context, a model.Application
 		old := s.apps[id]
 		if old.Status.IsActive() {
 			return model.Application{}, model.ErrAlreadyApplied
+		}
+	}
+	if maxActive > 0 {
+		n := 0
+		for _, ex := range s.apps {
+			if ex.ApplicantID == a.ApplicantID && ex.Status.CountsTowardLimit() {
+				n++
+			}
+		}
+		if n >= maxActive {
+			return model.Application{}, model.ErrTooManyApplications
 		}
 	}
 	if a.ID == "" {
