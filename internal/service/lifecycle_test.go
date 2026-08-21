@@ -26,6 +26,23 @@ type applicationLimitBarrierStore struct {
 	release chan struct{}
 }
 
+type withdrawalCreditBarrierStore struct {
+	store.Store
+	entered chan struct{}
+	release chan struct{}
+	applied chan struct{}
+	proceed chan struct{}
+}
+
+func (s *withdrawalCreditBarrierStore) ApplyCredit(ctx context.Context, userID string, delta int, reason model.CreditReason, relatedID, note string, now time.Time) (model.User, model.CreditLog, error) {
+	s.entered <- struct{}{}
+	<-s.release
+	u, log, err := s.Store.ApplyCredit(ctx, userID, delta, reason, relatedID, note, now)
+	s.applied <- struct{}{}
+	<-s.proceed
+	return u, log, err
+}
+
 func (s *applicationLimitBarrierStore) CreateApplication(ctx context.Context, a model.Application, maxActive int) (model.Application, error) {
 	s.entered <- struct{}{}
 	<-s.release
@@ -320,5 +337,90 @@ func TestConcurrentApplicationsRespectPendingLimit(t *testing.T) {
 	}
 	if active != 1 {
 		t.Fatalf("pending limit=1: active applications=%d", active)
+	}
+}
+
+func TestConcurrentApprovedWithdrawalsApplyOnePenalty(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemoryStore(time.Now, nil)
+	barrier := &withdrawalCreditBarrierStore{
+		Store:   mem,
+		entered: make(chan struct{}, 2),
+		release: make(chan struct{}),
+		applied: make(chan struct{}, 2),
+		proceed: make(chan struct{}),
+	}
+	svc := service.NewServices(barrier, auth.NewPasswordHasher(), auth.NewSessionManager(time.Hour), nil, 3)
+
+	adopter, err := mem.CreateUser(ctx, model.User{
+		ID: "user-withdraw", Username: "withdraw-adopter", DisplayName: "撤回申请人",
+		Role: model.RoleAdopter, Status: model.UserActive, CreditScore: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const appID = "app-approved"
+	pet, err := mem.CreatePet(ctx, model.Pet{
+		ID: "pet-reserved", Name: "团团", Species: model.SpeciesCat, Size: model.SizeSmall,
+		Status: model.PetReserved, ReservedAppID: appID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = mem.CreateApplication(ctx, model.Application{
+		ID: appID, PetID: pet.ID, ApplicantID: adopter.ID, Status: model.AppApproved,
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, withdrawErr := svc.App.Withdraw(ctx, adopter, appID)
+			errs <- withdrawErr
+		}()
+	}
+
+	<-barrier.entered
+	<-barrier.entered
+	close(barrier.release)
+	<-barrier.applied
+	<-barrier.applied
+	close(barrier.proceed)
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	conflicts := 0
+	for withdrawErr := range errs {
+		switch {
+		case withdrawErr == nil:
+			successes++
+		case errors.Is(withdrawErr, model.ErrInvalidAppStatus):
+			conflicts++
+		default:
+			t.Fatalf("unexpected withdraw error: %v", withdrawErr)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("want one successful withdrawal and one conflict, got successes=%d conflicts=%d", successes, conflicts)
+	}
+	fresh, err := mem.GetUserByID(ctx, adopter.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.CreditScore != 52 {
+		t.Fatalf("one approved withdrawal should apply one -8 penalty: credit=%d", fresh.CreditScore)
+	}
+	logs, err := mem.ListCreditLogs(ctx, adopter.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("one approved withdrawal should create one credit log: logs=%d", len(logs))
 	}
 }
