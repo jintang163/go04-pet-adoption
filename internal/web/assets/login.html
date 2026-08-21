@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>宠物领养 · 登录</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="auth-page">
+    <div class="auth-card">
+      <h1>宠物领养系统</h1>
+      <p class="subtitle">浏览待领养宠物、提交申请、审核与回访</p>
+      <div class="tabs">
+        <button class="btn active" id="tab-login" type="button">登录</button>
+        <button class="btn" id="tab-reg" type="button">注册</button>
+      </div>
+      <form id="login-form" class="form" style="margin-top:16px">
+        <label class="field"><span>用户名</span><input name="username" required /></label>
+        <label class="field"><span>口令</span><input name="password" type="password" required /></label>
+        <button class="btn btn-primary" type="submit">登录</button>
+      </form>
+      <form id="reg-form" class="form hidden" style="margin-top:16px">
+        <label class="field"><span>用户名</span><input name="username" required /></label>
+        <label class="field"><span>显示名</span><input name="display_name" required /></label>
+        <label class="field"><span>口令</span><input name="password" type="password" required /></label>
+        <div class="row">
+          <label class="field"><span>住房</span>
+            <select name="housing"><option value="apartment">公寓</option><option value="house">住宅</option><option value="detached">自建</option></select>
+          </label>
+          <label class="field"><span>年龄</span><input name="age_years" type="number" value="28" /></label>
+        </div>
+        <button class="btn btn-primary" type="submit">注册并登录</button>
+      </form>
+      <p class="err" id="err"></p>
+      <p class="subtitle">演示：alice / alice123，员工 staff / staff123，管理员 admin / admin123</p>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+  <script>
+    const loginForm = $("login-form"), regForm = $("reg-form"), err = $("err");
+    $("tab-login").onclick = () => { loginForm.classList.remove("hidden"); regForm.classList.add("hidden"); $("tab-login").classList.add("active"); $("tab-reg").classList.remove("active"); };
+    $("tab-reg").onclick = () => { regForm.classList.remove("hidden"); loginForm.classList.add("hidden"); $("tab-reg").classList.add("active"); $("tab-login").classList.remove("active"); };
+    async function afterAuth(data) {
+      setToken(data.token);
+      const role = data.user.role;
+      location.href = role === "admin" ? "/admin" : (role === "staff" ? "/staff" : "/app");
+    }
+    loginForm.onsubmit = async (e) => {
+      e.preventDefault(); err.textContent = "";
+      const fd = new FormData(loginForm);
+      try { await afterAuth(await api("/api/auth/login", { method:"POST", body: JSON.stringify({username:fd.get("username"), password:fd.get("password")}) })); }
+      catch (ex) { err.textContent = ex.message; }
+    };
+    regForm.onsubmit = async (e) => {
+      e.preventDefault(); err.textContent = "";
+      const fd = new FormData(regForm);
+      try {
+        await afterAuth(await api("/api/auth/register", { method:"POST", body: JSON.stringify({
+          username: fd.get("username"), password: fd.get("password"), display_name: fd.get("display_name"),
+          housing: fd.get("housing"), age_years: Number(fd.get("age_years")||0), role: "adopter"
+        })}));
+      } catch (ex) { err.textContent = ex.message; }
+    };
+  </script>
+</body>
+</html>

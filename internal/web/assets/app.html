@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>待领养广场</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="topbar"><div class="brand">宠物领养</div><div class="nav" id="userbar"></div></div>
+  <div class="layout">
+    <div class="card">
+      <div class="card-head">
+        <h2>待领养宠物</h2>
+        <div class="filters">
+          <select id="sp"><option value="">全部物种</option><option value="dog">狗</option><option value="cat">猫</option><option value="rabbit">兔</option></select>
+          <select id="sz"><option value="">全部体型</option><option value="small">小型</option><option value="medium">中型</option><option value="large">大型</option></select>
+          <input id="q" placeholder="关键词" />
+          <button class="btn" id="search">筛选</button>
+        </div>
+      </div>
+      <div class="grid" id="list"></div>
+      <p class="err" id="err"></p>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+  <script>
+    if (!requireLogin()) {}
+    else currentMe().then(fillUserBar).catch(() => location.href="/login");
+    async function load() {
+      const qs = new URLSearchParams({status:"published"});
+      if ($("sp").value) qs.set("species", $("sp").value);
+      if ($("sz").value) qs.set("size", $("sz").value);
+      if ($("q").value) qs.set("q", $("q").value);
+      const data = await api("/api/pets?" + qs.toString());
+      $("list").innerHTML = (data.items||[]).map(p => `
+        <div class="post">
+          <h3><a href="/pets/${p.id}">${p.name}</a></h3>
+          <div class="meta">
+            <span class="tag">${speciesLabel(p.species)}</span>
+            <span>${sizeLabel(p.size)}</span>
+            <span>${p.age_months} 月</span>
+            <span>${p.shelter_name||""}</span>
+          </div>
+          <p>${(p.story||"").slice(0,80)}</p>
+        </div>`).join("") || "<p class='subtitle'>暂无待领养宠物</p>";
+    }
+    $("search").onclick = () => load().catch(e => $("err").textContent = e.message);
+    load().catch(e => $("err").textContent = e.message);
+  </script>
+</body>
+</html>

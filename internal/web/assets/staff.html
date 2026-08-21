@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>救助站工作台</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="topbar"><div class="brand">宠物领养 · 员工</div><div class="nav" id="userbar"></div></div>
+  <div class="layout">
+    <div class="card" id="board"></div>
+    <div class="card">
+      <div class="card-head"><h2>发布宠物草稿</h2></div>
+      <form id="create" class="form">
+        <div class="row">
+          <label class="field"><span>名字</span><input name="name" required /></label>
+          <label class="field"><span>物种</span>
+            <select name="species"><option value="cat">猫</option><option value="dog">狗</option><option value="rabbit">兔</option></select>
+          </label>
+        </div>
+        <div class="row">
+          <label class="field"><span>体型</span>
+            <select name="size"><option value="small">小型</option><option value="medium">中型</option><option value="large">大型</option></select>
+          </label>
+          <label class="field"><span>月龄</span><input name="age_months" type="number" value="12" /></label>
+        </div>
+        <label class="field"><span>故事</span><textarea name="story" required>待领养，性格温顺。</textarea></label>
+        <label class="field"><span><input type="checkbox" name="allow_apartment" checked/> 允许公寓</span></label>
+        <label class="field"><span><input type="checkbox" name="publish"/> 立即发布</span></label>
+        <button class="btn btn-primary" type="submit">保存</button>
+      </form>
+    </div>
+    <div class="card"><h2>本站宠物</h2><div class="list" id="pets"></div></div>
+    <div class="card"><h2>待审申请</h2><div class="list" id="apps"></div></div>
+    <div class="card"><h2>回访</h2><div class="list" id="visits"></div></div>
+    <p class="err" id="err"></p>
+  </div>
+  <script src="/static/app.js"></script>
+  <script>
+    if (!requireLogin()) {}
+    currentMe().then(fillUserBar);
+    async function refresh() {
+      const [b, pets, apps, visits] = await Promise.all([
+        api("/api/staff/board"),
+        api("/api/pets"),
+        api("/api/staff/applications"),
+        api("/api/visits?status=scheduled")
+      ]);
+      $("board").innerHTML = `<div class="stats-grid">
+        <div class="stat"><div class="k">待审</div><div class="v">${b.pending_apps}</div></div>
+        <div class="stat"><div class="k">审核中</div><div class="v">${b.under_review_apps}</div></div>
+        <div class="stat"><div class="k">待领养</div><div class="v">${b.published_pets}</div></div>
+        <div class="stat"><div class="k">今日回访</div><div class="v">${b.due_visits_today}</div></div>
+      </div>`;
+      $("pets").innerHTML = (pets.items||[]).map(p => `<div class="post"><h3>${p.name} <span class="tag">${statusLabel(p.status)}</span></h3>
+        <div class="actions">
+          ${p.status==="draft"||p.status==="unavailable"?`<button class="btn" onclick="pub('${p.id}')">发布</button>`:""}
+          ${p.status==="published"?`<button class="btn" onclick="unpub('${p.id}')">下架</button>`:""}
+        </div></div>`).join("") || "暂无";
+      $("apps").innerHTML = (apps.items||[]).filter(x=>x.status==="pending"||x.status==="under_review"||x.status==="waitlisted"||x.status==="approved").map(x =>
+        `<div class="post"><h3>${x.pet_name} · ${x.applicant_name||x.applicant_id}</h3>
+        <div class="meta"><span class="tag">${statusLabel(x.status)}</span><span>${x.intro||""}</span></div>
+        <div class="actions">
+          <button class="btn" onclick="review('${x.id}')">开始审核</button>
+          <button class="btn btn-primary" onclick="approve('${x.id}')">录取</button>
+          <button class="btn btn-danger" onclick="reject('${x.id}')">拒绝</button>
+          ${x.status==="approved"?`<button class="btn" onclick="handover('${x.id}')">交接</button>`:""}
+        </div></div>`).join("") || "暂无待审";
+      $("visits").innerHTML = (visits.items||[]).map(v => `<div class="post"><h3>${v.pet_name} · ${v.type}</h3>
+        <div class="meta">${statusLabel(v.status)} · ${v.scheduled_at||""}</div>
+        <div class="actions"><button class="btn" onclick="complete('${v.id}')">完成回访</button></div></div>`).join("") || "暂无排期";
+    }
+    async function pub(id){ await api("/api/pets/"+id+"/publish",{method:"POST"}); refresh(); }
+    async function unpub(id){ await api("/api/pets/"+id+"/unpublish",{method:"POST", body: JSON.stringify({unavailable:false})}); refresh(); }
+    async function review(id){ await api("/api/applications/"+id+"/review",{method:"POST", body: JSON.stringify({note:"面谈中"})}); refresh(); }
+    async function approve(id){ await api("/api/applications/"+id+"/approve",{method:"POST", body: JSON.stringify({note:"条件符合", force:true})}); refresh(); }
+    async function reject(id){ const reason=prompt("拒绝原因")||"条件不符"; await api("/api/applications/"+id+"/reject",{method:"POST", body: JSON.stringify({reason})}); refresh(); }
+    async function handover(id){ await api("/api/applications/"+id+"/handover",{method:"POST", body: JSON.stringify({note:"已领取"})}); refresh(); }
+    async function complete(id){
+      await api("/api/visits/"+id+"/complete",{method:"POST", body: JSON.stringify({living_score:4,health_score:4,behavior_score:4,notes:"情况良好"})});
+      refresh();
+    }
+    $("create").onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        await api("/api/pets", {method:"POST", body: JSON.stringify({
+          name: fd.get("name"), species: fd.get("species"), size: fd.get("size"),
+          sex: "unknown", age_months: Number(fd.get("age_months")||12), story: fd.get("story"),
+          allow_apartment: fd.get("allow_apartment")==="on", allow_children: true, allow_other_pets: true,
+          min_adopter_age: 18, publish: fd.get("publish")==="on"
+        })});
+        e.target.reset(); refresh();
+      } catch(ex) { $("err").textContent = ex.message; }
+    };
+    refresh().catch(e => $("err").textContent = e.message);
+  </script>
+</body>
+</html>

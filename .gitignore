@@ -1,0 +1,4 @@
+data/store.json
+*.exe
+*.test
+/pa-server

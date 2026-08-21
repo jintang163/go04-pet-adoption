@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>我的领养</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="topbar"><div class="brand">宠物领养</div><div class="nav" id="userbar"></div></div>
+  <div class="layout">
+    <div class="card">
+      <h2>我的申请</h2>
+      <div class="list" id="apps"></div>
+    </div>
+    <div class="card">
+      <h2>回访安排</h2>
+      <div class="list" id="visits"></div>
+    </div>
+    <p class="err" id="err"></p>
+  </div>
+  <script src="/static/app.js"></script>
+  <script>
+    if (!requireLogin()) {}
+    currentMe().then(fillUserBar);
+    Promise.all([api("/api/me/applications"), api("/api/me/visits")]).then(([a,v]) => {
+      $("apps").innerHTML = (a.items||[]).map(x => `<div class="post"><h3>${x.pet_name||x.pet_id}</h3>
+        <div class="meta"><span class="tag">${statusLabel(x.status)}</span><span>${x.intro||""}</span></div>
+        ${x.status==="pending"||x.status==="under_review"||x.status==="waitlisted"||x.status==="approved"?
+          `<div class="actions"><button class="btn" onclick="withdraw('${x.id}')">撤回</button></div>`:""}
+      </div>`).join("") || "暂无申请";
+      $("visits").innerHTML = (v.items||[]).map(x => `<div class="post"><h3>${x.pet_name||""} · ${x.type}</h3>
+        <div class="meta"><span class="tag">${statusLabel(x.status)}</span><span>${x.scheduled_at||""}</span></div>
+        <p>${x.notes||""}</p></div>`).join("") || "暂无回访";
+    }).catch(e => $("err").textContent = e.message);
+    async function withdraw(id) {
+      try { await api("/api/applications/"+id+"/withdraw", {method:"POST"}); location.reload(); }
+      catch(e){ $("err").textContent=e.message; }
+    }
+  </script>
+</body>
+</html>

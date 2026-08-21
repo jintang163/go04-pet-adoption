@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>管理后台</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="topbar"><div class="brand">宠物领养 · 管理</div><div class="nav" id="userbar"></div></div>
+  <div class="layout">
+    <div class="card" id="stats"></div>
+    <div class="card"><h2>用户</h2><div id="users"></div></div>
+    <p class="err" id="err"></p>
+  </div>
+  <script src="/static/app.js"></script>
+  <script>
+    if (!requireLogin()) {}
+    currentMe().then(fillUserBar);
+    Promise.all([api("/api/stats"), api("/api/users")]).then(([s,u]) => {
+      $("stats").innerHTML = `<div class="stats-grid">
+        <div class="stat"><div class="k">用户</div><div class="v">${s.users_total}</div></div>
+        <div class="stat"><div class="k">宠物</div><div class="v">${s.pets_total}</div></div>
+        <div class="stat"><div class="k">申请</div><div class="v">${s.apps_total}</div></div>
+        <div class="stat"><div class="k">本月交接</div><div class="v">${s.handover_this_month}</div></div>
+        <div class="stat"><div class="k">回访完成率</div><div class="v">${Math.round((s.visit_complete_rate||0)*100)}%</div></div>
+      </div>`;
+      $("users").innerHTML = `<table class="table"><tr><th>用户</th><th>角色</th><th>信用</th><th>状态</th><th></th></tr>
+        ${(u.items||[]).map(x => `<tr><td>${x.display_name} (${x.username})</td><td>${x.role}</td>
+        <td>${x.credit_score}</td><td>${x.status}</td>
+        <td>${x.role!=="admin"?(x.status==="frozen"?`<button class="btn" onclick="unfreeze('${x.id}')">解冻</button>`:`<button class="btn" onclick="freeze('${x.id}')">冻结</button>`):""}</td></tr>`).join("")}
+      </table>`;
+    }).catch(e => $("err").textContent = e.message);
+    async function freeze(id){ await api("/api/users/"+id+"/freeze",{method:"POST"}); location.reload(); }
+    async function unfreeze(id){ await api("/api/users/"+id+"/unfreeze",{method:"POST"}); location.reload(); }
+  </script>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>宠物详情</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="topbar"><div class="brand">宠物领养</div><div class="nav" id="userbar"></div></div>
+  <div class="layout">
+    <div class="card" id="detail"></div>
+    <div class="card">
+      <h2>提交领养申请</h2>
+      <form id="apply" class="form">
+        <div class="row">
+          <label class="field"><span>住房</span>
+            <select name="housing"><option value="apartment">公寓</option><option value="house">住宅</option><option value="detached">自建</option></select>
+          </label>
+          <label class="field"><span>面积㎡</span><input name="area_sqm" type="number" value="80" /></label>
+        </div>
+        <div class="row">
+          <label class="field"><span>每日独处小时</span><input name="hours_alone" type="number" value="4" /></label>
+          <label class="field"><span>经验</span>
+            <select name="experience"><option value="first_time">初次</option><option value="some">有一些</option><option value="expert">资深</option></select>
+          </label>
+        </div>
+        <label class="field"><span>电话</span><input name="phone" required /></label>
+        <label class="field"><span>自我介绍</span><textarea name="intro" required>有稳定住所，可按时喂养。</textarea></label>
+        <label class="field"><span><input type="checkbox" name="has_children"/> 家中有孩</span></label>
+        <label class="field"><span><input type="checkbox" name="has_other_pets"/> 已有其他宠物</span></label>
+        <button class="btn btn-primary" type="submit">提交申请</button>
+      </form>
+      <p class="err" id="err"></p>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+  <script>
+    if (!requireLogin()) {}
+    const id = location.pathname.split("/").pop();
+    currentMe().then(fillUserBar);
+    api("/api/pets/"+id).then(p => {
+      $("detail").innerHTML = `<h2>${p.name} <span class="tag">${statusLabel(p.status)}</span></h2>
+        <div class="meta">${speciesLabel(p.species)} · ${sizeLabel(p.size)} · ${p.age_months}月 · ${p.shelter_name||""}</div>
+        <p>${p.story||""}</p>
+        <div class="meta">绝育 ${p.sterilized?"是":"否"} · 疫苗 ${p.vaccinated?"是":"否"} · 允许公寓 ${p.allow_apartment?"是":"否"}</div>
+        <div class="actions">
+          <button class="btn" onclick="fav()">${p.favorited?"已收藏":"收藏"}</button>
+        </div>`;
+      window._pet = p;
+    }).catch(e => $("err").textContent = e.message);
+    async function fav() {
+      try { await api("/api/pets/"+id+"/favorite", {method:"POST"}); location.reload(); }
+      catch(e){ $("err").textContent = e.message; }
+    }
+    $("apply").onsubmit = async (e) => {
+      e.preventDefault(); $("err").textContent="";
+      const fd = new FormData(e.target);
+      try {
+        await api("/api/pets/"+id+"/apply", {method:"POST", body: JSON.stringify({
+          housing: fd.get("housing"), area_sqm: Number(fd.get("area_sqm")||0),
+          hours_alone: Number(fd.get("hours_alone")||0), experience: fd.get("experience"),
+          phone: fd.get("phone"), intro: fd.get("intro"),
+          has_children: fd.get("has_children")==="on", has_other_pets: fd.get("has_other_pets")==="on"
+        })});
+        $("err").className="ok"; $("err").textContent="申请已提交";
+      } catch(ex) { $("err").className="err"; $("err").textContent = ex.message; }
+    };
+  </script>
+</body>
+</html>
