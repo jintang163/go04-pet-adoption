@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"go04-pet-adoption/internal/model"
@@ -263,6 +264,55 @@ func (s *MemoryStore) ApproveApplication(ctx context.Context, appID, reviewerID,
 	waitlisted := s.waitlistOthersLocked(p.ID, a.ID, now)
 	s.afterWrite()
 	return a, p, waitlisted, nil
+}
+
+func (s *MemoryStore) WithdrawApprovedApplication(ctx context.Context, appID, applicantID, actorID string, creditDelta int, creditReason model.CreditReason, creditNote string, now time.Time) (model.Application, *model.Pet, []model.Application, model.CreditLog, error) {
+	_ = ctx
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.apps[appID]
+	if !ok {
+		return model.Application{}, nil, nil, model.CreditLog{}, model.ErrNotFound
+	}
+	if a.Status != model.AppApproved {
+		return model.Application{}, nil, nil, model.CreditLog{}, model.ErrInvalidAppStatus
+	}
+	p, ok := s.pets[a.PetID]
+	if !ok {
+		return model.Application{}, nil, nil, model.CreditLog{}, model.ErrNotFound
+	}
+	if now.IsZero() {
+		now = s.now()
+	}
+	u, ok := s.users[applicantID]
+	if !ok {
+		return model.Application{}, nil, nil, model.CreditLog{}, model.ErrNotFound
+	}
+	u.CreditScore = model.ClampCredit(u.CreditScore + creditDelta)
+	u.UpdatedAt = now
+	log := model.CreditLog{
+		ID: s.genID(model.CreditLogIDPrefix), UserID: applicantID, Delta: creditDelta,
+		Score: u.CreditScore, Reason: creditReason, RelatedID: a.ID,
+		Note: strings.TrimSpace(creditNote), CreatedAt: now,
+	}
+	s.users[u.ID] = u
+	s.credits[log.ID] = log
+	a.Status = model.AppWithdrawn
+	a.ReviewerID = actorID
+	a.RejectReason = "申请人撤回"
+	a.UpdatedAt = now
+	t := now
+	a.ReviewedAt = &t
+	s.apps[a.ID] = a
+	var petPtr *model.Pet
+	var promoted []model.Application
+	if p.ReservedAppID == a.ID {
+		np, pr := s.unlockPetAndPromoteLocked(p, now)
+		petPtr = &np
+		promoted = pr
+	}
+	s.afterWrite()
+	return a, petPtr, promoted, log, nil
 }
 
 func (s *MemoryStore) RejectApplication(ctx context.Context, appID, reviewerID, reason string, now time.Time) (model.Application, *model.Pet, []model.Application, error) {

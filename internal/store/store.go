@@ -72,6 +72,7 @@ type Store interface {
 
 	ApproveApplication(ctx context.Context, appID, reviewerID, note string, now time.Time) (model.Application, model.Pet, []model.Application, error)
 	RejectApplication(ctx context.Context, appID, reviewerID, reason string, now time.Time) (model.Application, *model.Pet, []model.Application, error)
+	WithdrawApprovedApplication(ctx context.Context, appID, applicantID, actorID string, creditDelta int, creditReason model.CreditReason, creditNote string, now time.Time) (model.Application, *model.Pet, []model.Application, model.CreditLog, error)
 	HandoverAdoption(ctx context.Context, appID, staffID, note string, visits []model.Visit, now time.Time) (model.Application, model.Pet, []model.Visit, error)
 	ReturnAdoption(ctx context.Context, appID, actorID, reason string, medical bool, now time.Time) (model.Application, model.Pet, error)
 	ApplyCredit(ctx context.Context, userID string, delta int, reason model.CreditReason, relatedID, note string, now time.Time) (model.User, model.CreditLog, error)

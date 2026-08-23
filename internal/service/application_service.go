@@ -223,16 +223,7 @@ func (svc *ApplicationService) Withdraw(ctx context.Context, actor model.User, i
 	}
 	now := svc.clock.Now()
 	if a.Status == model.AppApproved {
-		_, _, err := svc.store.ApplyCredit(ctx, a.ApplicantID, policy.DeltaApplyDefault, model.CreditApplyDefault, a.ID, "录取后撤回", now)
-		if err != nil {
-			return model.Application{}, err
-		}
-		updated, pet, promoted, err := svc.store.RejectApplication(ctx, id, actor.ID, "申请人撤回", now)
-		if err != nil {
-			return model.Application{}, err
-		}
-		updated.Status = model.AppWithdrawn
-		updated, err = svc.store.UpdateApplication(ctx, updated)
+		updated, pet, promoted, _, err := svc.store.WithdrawApprovedApplication(ctx, id, a.ApplicantID, actor.ID, policy.DeltaApplyDefault, model.CreditApplyDefault, "录取后撤回", now)
 		if err != nil {
 			return model.Application{}, err
 		}

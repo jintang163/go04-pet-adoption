@@ -34,13 +34,13 @@ type withdrawalCreditBarrierStore struct {
 	proceed chan struct{}
 }
 
-func (s *withdrawalCreditBarrierStore) ApplyCredit(ctx context.Context, userID string, delta int, reason model.CreditReason, relatedID, note string, now time.Time) (model.User, model.CreditLog, error) {
+func (s *withdrawalCreditBarrierStore) WithdrawApprovedApplication(ctx context.Context, appID, applicantID, actorID string, creditDelta int, creditReason model.CreditReason, creditNote string, now time.Time) (model.Application, *model.Pet, []model.Application, model.CreditLog, error) {
 	s.entered <- struct{}{}
 	<-s.release
-	u, log, err := s.Store.ApplyCredit(ctx, userID, delta, reason, relatedID, note, now)
+	app, pet, promoted, log, err := s.Store.WithdrawApprovedApplication(ctx, appID, applicantID, actorID, creditDelta, creditReason, creditNote, now)
 	s.applied <- struct{}{}
 	<-s.proceed
-	return u, log, err
+	return app, pet, promoted, log, err
 }
 
 func (s *applicationLimitBarrierStore) CreateApplication(ctx context.Context, a model.Application, maxActive int) (model.Application, error) {
